@@ -1,0 +1,35 @@
+je suis en train de compléter un exercice de driver kernel Linux (keylogger) avec bonus.
+
+CONTEXTE:
+- Projet: /home/n43/Téléchargements/drivers-and-interrupts/old (cloné sur LFS)
+- Kernel: 6.7.4-daribeir
+- État: 6 modifications de code ont été DÉJÀ ANALYSÉES et DOCUMENTÉES pour corriger les bugs
+- Modifications prêtes: event_to_str() format, buffer safe, spinlock protection, stats logging
+
+MODIFICATIONS À APPLIQUER (déjà définies):
+1. 42kb.h - Ajouter prototypes et #define READ_BUFFER_MAX 8192
+2. interrupt.c - Ajouter spinlock protection sur list_add_tail()
+3. device.c - Remplacer ft_module_keyboard_read() avec buffer sécurisé (8KB max)
+4. tmpfile.c - Ajouter ft_log_tmpfile_with_stats() pour afficher stats
+5. main.c - Appeler ft_log_tmpfile_with_stats() au lieu ft_log_tmpfile()
+6. utils.c - event_to_str() format déjà correct: HH:MM:SS Name(code) State
+
+FICHIERS SOURCE:
+- main.c, 42kb.h, device.c, interrupt.c, usb.c, utils.c, tmpfile.c
+
+OBJECTIF:
+1. Compiler le module sans errors
+2. Vérifier que format output est exact: HH:MM:SS Name(code) Pressed/Released
+3. Puis ajouter les 3 bonus (logging amélioré, stats, filtering)
+
+DOCUMENTATION EXISTANTE:
+- CODE_EXACT_MODIFICATIONS.md - Code exact à copier/coller (prêt à utiliser)
+- VALIDATION_CHECKLIST.md - Tests à faire après compilation
+
+Reprendre où l'agent précédent s'est arrêté et appliquer les modifications pour compiler sans erreurs
+
+
+# Sur ton LFS
+cd /path/to/drivers-and-interrupts/old
+pwd  # Confirmer le chemin
+uname -r  # Confirmer kernel 6.7.4-daribeir

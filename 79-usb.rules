@@ -1,0 +1,4 @@
+# /etc/udev/rules.d/79-usb.rules  
+# make sure to reload drivers after installing them and call depmod -a 
+ACTION=="add", SUBSYSTEM=="usb", PROGRAM="/usr/sbin/modprobe 42kb"
+ACTION=="remove", SUBSYSTEM=="usb", PROGRAM="/usr/sbin/rmmod 42kb"
