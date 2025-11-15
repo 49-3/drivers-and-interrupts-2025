@@ -6,7 +6,7 @@
 /*   By: daribeir <daribeir@student.42mulhouse.fr>  +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/28 01:20:05 by daribeir          #+#    #+#             */
-/*   Updated: 2025/04/28 01:20:06 by daribeir         ###   ##### Mulhouse.fr */
+/*   Updated: 2025/11/15 23:22:20 by daribeir         ###   ##### Mulhouse.fr */
 /*                                                                            */
 /******************************************************************************/
 
@@ -18,7 +18,7 @@
 #include <linux/spinlock_types.h>
 #include "42kb.h"
 
-extern DEFINE_SPINLOCK(devfile_io_spinlock);
+extern spinlock_t devfile_io_spinlock;
 DEFINE_SPINLOCK(q_data_spinlock);
 queue_data *q_data;
 int is_caps = 0;

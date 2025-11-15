@@ -6,7 +6,7 @@
 /*   By: daribeir <daribeir@student.42mulhouse.fr>  +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/28 01:19:44 by daribeir          #+#    #+#             */
-/*   Updated: 2025/04/28 01:19:45 by daribeir         ###   ##### Mulhouse.fr */
+/*   Updated: 2025/11/16 00:27:08 by daribeir         ###   ##### Mulhouse.fr */
 /*                                                                            */
 /******************************************************************************/
 
@@ -19,6 +19,9 @@
 #include <linux/ktime.h>
 #include <linux/timekeeping.h>
 
+/**
+ * ===== DRIVER CONFIGURATION =====
+ */
 #define KB_IRQ 1
 #define KB_PORT 0x60
 
@@ -26,6 +29,19 @@
 #define DRV_NAME "ft_module_keyboard_driver"
 
 #define MAX_SCANCODE_SIZE 0x80
+#define READ_BUFFER_MAX 8192
+
+/**
+ * ===== MODULE INFO =====
+ */
+#define DRIVER_AUTHOR "david ribeiro daribeir@student.42mulhouse.fr"
+#define DRIVER_DESC "Linux Keyboard Driver with HID support and advanced logging"
+#define DRIVER_VERSION "2.0.0"
+#define DRIVER_LICENSE "GPL"
+
+/**
+ * ===== END CONFIGURATION =====
+ */
 
 /**
  * ft_key - a representation of a key
@@ -121,9 +137,7 @@ char	*ft_itoa(long long nbr);
 
 // tmpfile functions
 void ft_log_tmpfile_with_stats(void);
-
-// Constants
-#define READ_BUFFER_MAX 8192
+void ft_log_stats_to_kernel(void);
 
 // Misc device handling
 int ft_create_misc_device(void);

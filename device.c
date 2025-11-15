@@ -6,7 +6,7 @@
 /*   By: daribeir <daribeir@student.42mulhouse.fr>  +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/28 01:19:57 by daribeir          #+#    #+#             */
-/*   Updated: 2025/04/28 01:19:58 by daribeir         ###   ##### Mulhouse.fr */
+/*   Updated: 2025/11/16 00:27:13 by daribeir         ###   ##### Mulhouse.fr */
 /*                                                                            */
 /******************************************************************************/
 
@@ -18,7 +18,6 @@
 #include <linux/seq_file.h> /* seq_read, seq_lseek, single_release */
 #include "42kb.h"
 
-#define READ_BUFFER_MAX 8192
 DEFINE_SPINLOCK(devfile_io_spinlock);
 static int ft_module_keyboard_open(struct inode *, struct file *);
 static ssize_t ft_module_keyboard_read(struct file *, char *, size_t, loff_t *);
@@ -51,7 +50,7 @@ static ssize_t ft_module_keyboard_read(struct file *file, char *buff, size_t cou
 	int did_not_cpy;
 
 	ft_log("Misc device read");
-	
+
 	// Allocation sécurisée
 	output_str = kmalloc(READ_BUFFER_MAX, GFP_KERNEL);
 	if (!output_str) {
@@ -62,21 +61,21 @@ static ssize_t ft_module_keyboard_read(struct file *file, char *buff, size_t cou
 
 	// Protéger accès liste
 	spin_lock(&devfile_io_spinlock);
-	
+
 	head_ptr = g_driver->events_head->list.next;
-	while (head_ptr != &(g_driver->events_head->list) && 
+	while (head_ptr != &(g_driver->events_head->list) &&
 	       current_len < READ_BUFFER_MAX - 256)
 	{
 		entry = list_entry(head_ptr, struct event_struct, list);
 		temp_str = event_to_str(*entry);
-		
+
 		// Vérifier overflow AVANT concat
 		size_t needed = strlen(temp_str);
 		if (current_len + needed >= READ_BUFFER_MAX) {
 			kfree(temp_str);
 			break;
 		}
-		
+
 		strncat(output_str, temp_str, READ_BUFFER_MAX - current_len - 1);
 		current_len = strlen(output_str);
 		kfree(temp_str);
@@ -84,7 +83,7 @@ static ssize_t ft_module_keyboard_read(struct file *file, char *buff, size_t cou
 		head_ptr = head_ptr->next;
 	}
 	spin_unlock(&devfile_io_spinlock);
-	
+
 	if (*offset >= current_len)
 	{
 		kfree(output_str);
@@ -95,7 +94,7 @@ static ssize_t ft_module_keyboard_read(struct file *file, char *buff, size_t cou
 	to_copy = remaining < count ? remaining : count;
 
 	did_not_cpy = copy_to_user(buff, output_str + *offset, to_copy);
-	
+
 	if (did_not_cpy > 0) {
 		ft_warn("copy_to_user failed");
 		kfree(output_str);
@@ -103,7 +102,7 @@ static ssize_t ft_module_keyboard_read(struct file *file, char *buff, size_t cou
 	}
 
 	*offset += (to_copy - did_not_cpy);
-	
+
 	kfree(output_str);
 	return to_copy - did_not_cpy;
 }

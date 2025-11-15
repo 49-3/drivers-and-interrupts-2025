@@ -6,7 +6,7 @@
 /*   By: daribeir <daribeir@student.42mulhouse.fr>  +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/28 01:19:29 by daribeir          #+#    #+#             */
-/*   Updated: 2025/04/28 01:19:30 by daribeir         ###   ##### Mulhouse.fr */
+/*   Updated: 2025/11/16 00:28:25 by daribeir         ###   ##### Mulhouse.fr */
 /*                                                                            */
 /******************************************************************************/
 
@@ -15,12 +15,6 @@
 #include <linux/hid.h>
 #include <linux/irqnr.h>
 #include "42kb.h"
-
-
-#define DRIVER_AUTHOR "david ribeiro daribeir@student.42mulhouse.fr"
-#define DRIVER_DESC   "drivers and interupts"
-#define DRIVER_VERSION "1.0.0"
-#define DRIVER_LICENSE "GPL"
 
 MODULE_LICENSE(DRIVER_LICENSE);
 MODULE_AUTHOR(DRIVER_AUTHOR);
@@ -154,12 +148,13 @@ void cleanup_module(void)
 	ft_log("Cleaning up module");
 
 	// print everything here with stats
+	ft_log_stats_to_kernel();
 	ft_log_tmpfile_with_stats();
 
 	ft_deregister_interrupt();
 	ft_destroy_misc_device();
 	ft_deregister_usb();
 	ft_free_driver(g_driver);
-	
+
 	ft_log("Module cleanup complete");
 }
