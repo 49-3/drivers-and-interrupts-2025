@@ -6,7 +6,7 @@
 /*   By: daribeir <daribeir@student.42mulhouse.fr>  +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/28 01:19:44 by daribeir          #+#    #+#             */
-/*   Updated: 2025/11/16 00:27:08 by daribeir         ###   ##### Mulhouse.fr */
+/*   Updated: 2025/11/16 03:12:58 by daribeir         ###   ##### Mulhouse.fr */
 /*                                                                            */
 /******************************************************************************/
 
@@ -149,6 +149,8 @@ void ft_deregister_interrupt(void);
 
 // tmpfile handling
 int ft_create_tmpfile(void);
+void ft_log_event_to_tmpfile(event_struct *event);
+void ft_log_tmpfile_with_stats(void);
 void ft_destroy_tmpfile(void);
 void ft_log_tmpfile(void);
 

@@ -6,7 +6,7 @@
 /*   By: daribeir <daribeir@student.42mulhouse.fr>  +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/04/28 01:20:36 by daribeir          #+#    #+#             */
-/*   Updated: 2025/11/16 00:15:14 by daribeir         ###   ##### Mulhouse.fr */
+/*   Updated: 2025/11/16 03:12:58 by daribeir         ###   ##### Mulhouse.fr */
 /*                                                                            */
 /******************************************************************************/
 
@@ -142,7 +142,11 @@ static void handle_input_event(struct input_handle *handle, unsigned int type,
 	g_driver->total_events++;
 	spin_unlock(&devfile_io_spinlock);
 
-	ft_log("USB HID Key captured");
+	// Log event to /tmp in real-time
+	ft_log_event_to_tmpfile(event);
+
+	// Debug: Disabled to reduce log noise
+	// ft_log("USB HID Key captured");
 }
 
 static int handle_input_connect(struct input_handler *handler,

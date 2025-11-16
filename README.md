@@ -565,7 +565,7 @@ Score attendu: +10% points ✅
 ```
 ❌ Non implémenté (complexe/risqué)
 
-Raison: 
+Raison:
 - Unload driver clavier officiel = risque panic
 - Emulation TTY = deep kernel knowledge
 - Points limités (+10-15%)
