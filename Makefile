@@ -6,7 +6,7 @@
 #    By: daribeir <daribeir@student.42mulhouse.fr>  +#+  +:+       +#+         #
 #                                                 +#+#+#+#+#+   +#+            #
 #    Created: 2025/04/28 01:20:24 by daribeir          #+#    #+#              #
-#    Updated: 2025/11/16 00:46:23 by daribeir         ###   ##### Mulhouse.fr  #
+#    Updated: 2025/11/16 04:12:16 by daribeir         ###   ##### Mulhouse.fr  #
 #                                                                              #
 #******************************************************************************#
 
@@ -76,6 +76,7 @@ uninstall:
 	@rm -f /lib/modules/$(shell uname -r)/kernel/drivers/misc/42kb.ko 2>/dev/null
 	@rm -f $(UDEV_RULES_DIR)/$(RULES_FILE) 2>/dev/null
 	@depmod -a > /dev/null 2>&1
+	@rmmod 42kb > /dev/null 2>&1
 	@udevadm control --reload-rules > /dev/null 2>&1
 	@udevadm trigger > /dev/null 2>&1
 	@echo ""
